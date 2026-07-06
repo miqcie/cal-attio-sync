@@ -1,0 +1,12 @@
+{
+  "name": "cal-attio-sync",
+  "version": "0.1.0",
+  "description": "Free, self-hosted Cal.com → Attio booking sync (Val.town or Cloudflare Workers)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "setup": "bun scripts/setup-attio.ts",
+    "deploy:worker": "wrangler deploy"
+  }
+}
