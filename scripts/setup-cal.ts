@@ -1,4 +1,4 @@
-// Creates the Cal.com webhook pointing at your deployed handler.
+// Creates the Cal.com webhook pointing at your deployed handler (API v2).
 // Usage: CAL_API_KEY=... bun scripts/setup-cal.ts <subscriber-url> <webhook-secret>
 
 const apiKey = process.env.CAL_API_KEY;
@@ -16,13 +16,15 @@ const TRIGGERS = [
   "MEETING_ENDED",
 ];
 
-// Cal.com v1 only supports query-param auth; the key will appear in any request logs.
-const res = await fetch(`https://api.cal.com/v1/webhooks?apiKey=${encodeURIComponent(apiKey)}`, {
+const res = await fetch("https://api.cal.com/v2/webhooks", {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: {
+    authorization: `Bearer ${apiKey}`,
+    "content-type": "application/json",
+  },
   body: JSON.stringify({
     subscriberUrl,
-    eventTriggers: TRIGGERS,
+    triggers: TRIGGERS,
     active: true,
     secret,
   }),
