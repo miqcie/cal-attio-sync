@@ -14,7 +14,7 @@ No database. Attio is the store. Runs on [Val.town](https://val.town) or Cloudfl
 
 ### 1. Create the Bookings list in Attio
 
-Get a workspace API key from Attio → Settings → Developers, then:
+Get a workspace API key from [Attio → Workspace settings → Developers](https://app.attio.com/settings/developers) (record read-write + list read-write scopes), then:
 
 ```sh
 ATTIO_API_KEY=... bun scripts/setup-attio.ts
@@ -38,7 +38,7 @@ wrangler deploy
 
 ### 3. Point Cal.com at it
 
-Two ways. **In the UI:** Settings → Developer → Webhooks — set subscriber URL to your endpoint, secret to the one you picked, and enable the five booking/meeting triggers. **Or with an API key** (Settings → Developer → API keys):
+Two ways. **In the UI:** [app.cal.com/settings/developer/webhooks](https://app.cal.com/settings/developer/webhooks) — set subscriber URL to your endpoint, secret to the one you picked, and enable the five booking/meeting triggers. **Or with an API key** ([app.cal.com/settings/developer/api-keys](https://app.cal.com/settings/developer/api-keys)):
 
 ```sh
 CAL_API_KEY=... bun scripts/setup-cal.ts https://your-endpoint.example.com <webhook-secret>
