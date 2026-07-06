@@ -8,7 +8,7 @@ Free, self-hosted Cal.com → Attio booking sync. A single webhook handler that:
 
 A list rather than a custom object because Attio's free plan doesn't allow custom objects; the entry's parent record is the attendee, so bookings show on the person's timeline either way.
 
-No database. Attio is the store. Runs on [Val.town](https://val.town) or Cloudflare Workers (free tiers of either) — the core is platform-agnostic Web-standard TypeScript.
+No database. Attio is the store. Runs on [Val.town](https://val.town) or Cloudflare Workers (free tiers of either) — the core is plain Web-standard TypeScript.
 
 ## Setup
 
@@ -24,7 +24,7 @@ Idempotent — creates the `bookings` list (parent: People) with `booking_uid` (
 
 ### 2. Deploy the handler
 
-Pick a webhook secret (any random string). You'll set it in both places.
+Pick a webhook secret (any random string). You'll set it twice — on the handler and in Cal.com.
 
 **Val.town** — create an HTTP val from `main.tsx` + `src/` (or use the [`vt` CLI](https://docs.val.town/vt) to push this repo), then set `ATTIO_API_KEY` and `CAL_WEBHOOK_SECRET` in the val's Environment Variables. Your endpoint is the val's URL.
 
@@ -38,7 +38,7 @@ wrangler deploy
 
 ### 3. Point Cal.com at it
 
-Either in the UI (Settings → Developer → Webhooks: subscriber URL = your endpoint, secret = the one you picked, enable the five booking/meeting triggers), or with an API key from Settings → Developer → API keys:
+Two ways. **In the UI:** Settings → Developer → Webhooks — set subscriber URL to your endpoint, secret to the one you picked, and enable the five booking/meeting triggers. **Or with an API key** (Settings → Developer → API keys):
 
 ```sh
 CAL_API_KEY=... bun scripts/setup-cal.ts https://your-endpoint.example.com <webhook-secret>
