@@ -70,7 +70,8 @@ export interface BookingValues {
 export async function assertBooking(apiKey: string, booking: BookingValues) {
   const { attendee, ...rest } = booking;
   const entry_values: Record<string, unknown> = Object.fromEntries(
-    Object.entries(rest).filter(([, v]) => v !== undefined && v !== ""),
+    // != null drops both null and undefined — Cal.com sends explicit nulls (e.g. cancellationReason).
+    Object.entries(rest).filter(([, v]) => v != null && v !== ""),
   );
   if (attendee) {
     return attio(apiKey, "PUT", "/lists/bookings/entries?matching_attribute=booking_uid", {
