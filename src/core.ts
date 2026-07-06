@@ -1,7 +1,7 @@
 // Platform-agnostic Cal.com → Attio webhook handler.
 // Entry points (Val.town main.tsx, Cloudflare worker.ts) just call handleRequest().
 
-import { assertBooking, assertPerson, type BookingValues } from "./attio.ts";
+import { assertBooking, assertPerson, getBookingStatus, type BookingValues } from "./attio.ts";
 
 export interface Env {
   ATTIO_API_KEY: string;
@@ -10,32 +10,33 @@ export interface Env {
 
 const STATUS_BY_EVENT: Record<string, string> = {
   BOOKING_CREATED: "confirmed",
-  BOOKING_RESCHEDULED: "rescheduled",
+  BOOKING_RESCHEDULED: "confirmed", // the new booking is the active one; the old uid gets cancelled below
   BOOKING_CANCELLED: "cancelled",
   MEETING_ENDED: "completed",
   // BOOKING_NO_SHOW_UPDATED handled specially (payload says who no-showed)
 };
 
-/** Constant-time-ish HMAC-SHA256 verification of Cal.com's X-Cal-Signature-256 header. */
+// Terminal states never regress to "confirmed" — webhook deliveries are unordered and retried.
+const TERMINAL = new Set(["cancelled", "completed", "no_show"]);
+
+/** Timing-safe HMAC-SHA256 verification of Cal.com's X-Cal-Signature-256 header. Fails closed on a missing secret. */
 export async function verifySignature(
   secret: string,
   rawBody: string,
   signature: string | null,
 ): Promise<boolean> {
-  if (!signature) return false;
+  if (!secret || !signature || !/^[0-9a-f]{64}$/i.test(signature)) return false;
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"],
+    ["verify"],
   );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
-  const expected = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  if (expected.length !== signature.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
-  return diff === 0;
+  const sigBytes = Uint8Array.from(
+    signature.match(/../g)!.map((h) => parseInt(h, 16)),
+  );
+  return crypto.subtle.verify("HMAC", key, sigBytes, new TextEncoder().encode(rawBody));
 }
 
 interface Attendee {
@@ -91,10 +92,20 @@ export async function handleWebhook(body: any, env: Env): Promise<string> {
 
   let status = STATUS_BY_EVENT[event];
   if (event === "BOOKING_NO_SHOW_UPDATED") {
-    // Payload carries per-attendee noShow flags; any true → no_show.
-    status = booking.attendees.some((a) => a.noShow) ? "no_show" : "confirmed";
+    // Payload carries per-attendee noShow flags; without a positive flag, don't guess a status.
+    if (!booking.attendees.some((a) => a.noShow)) return "ignored: no-show update without noShow flag";
+    status = "no_show";
   }
   if (!status) return `ignored: unhandled event ${event}`;
+
+  // Unordered/retried deliveries must not resurrect a finished booking
+  // (e.g. a retried BOOKING_CREATED landing after BOOKING_CANCELLED).
+  if (status === "confirmed") {
+    const current = await getBookingStatus(env.ATTIO_API_KEY, booking.uid);
+    if (current && TERMINAL.has(current)) {
+      return `ignored: ${booking.uid} already ${current}`;
+    }
+  }
 
   // Assert person records for all attendees; link the first as the booking's attendee.
   let firstPersonId: string | undefined;

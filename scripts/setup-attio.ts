@@ -68,7 +68,7 @@ for (const title of STATUS_OPTIONS) {
     await createSelectOption(apiKey, "status", title);
     console.log(`Created status option: ${title}`);
   } catch (e) {
-    if (e instanceof AttioError && (e.status === 409 || e.status === 400)) {
+    if (e instanceof AttioError && e.status === 409) {
       console.log(`Status option exists: ${title}`);
     } else throw e;
   }

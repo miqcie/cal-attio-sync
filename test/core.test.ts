@@ -22,12 +22,20 @@ interface RecordedCall {
   body: any;
 }
 let calls: RecordedCall[] = [];
+let existingStatus: string | null = null; // what the status query reports for the booking
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   calls = [];
+  existingStatus = null;
   globalThis.fetch = (async (url: any, init: any) => {
     calls.push({ method: init.method, url: String(url), body: JSON.parse(init.body) });
+    if (String(url).includes("/records/query")) {
+      const data = existingStatus
+        ? [{ values: { status: [{ option: { title: existingStatus } }] } }]
+        : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    }
     return new Response(
       JSON.stringify({ data: { id: { record_id: "person-123" }, values: {} } }),
       { status: 200 },
@@ -66,7 +74,7 @@ const baseBooking = {
 };
 
 function bookingUpsert(): RecordedCall | undefined {
-  return calls.find((c) => c.url.includes("/objects/bookings/records"));
+  return calls.find((c) => c.method === "PUT" && c.url.includes("/objects/bookings/records"));
 }
 function personUpserts(): RecordedCall[] {
   return calls.filter((c) => c.url.includes("/objects/people/records"));
@@ -82,6 +90,9 @@ describe("verifySignature", () => {
   });
   test("rejects a missing signature", async () => {
     expect(await verifySignature("s", "hello", null)).toBe(false);
+  });
+  test("fails closed on an empty secret", async () => {
+    expect(await verifySignature("", "hello", "ab".repeat(32))).toBe(false);
   });
 });
 
@@ -106,6 +117,10 @@ describe("handleRequest", () => {
     expect(person.method).toBe("PUT");
     expect(person.url).toContain("matching_attribute=email_addresses");
     expect(person.body.data.values.email_addresses).toEqual(["jane@example.com"]);
+    // Attio's personal-name type requires the structured shape, not a bare string.
+    expect(person.body.data.values.name).toEqual([
+      { first_name: "Jane", last_name: "Doe", full_name: "Jane Doe" },
+    ]);
 
     const booking = bookingUpsert()!;
     expect(booking.method).toBe("PUT");
@@ -126,16 +141,24 @@ describe("handleRequest", () => {
     expect(v.cancellation_reason).toBe("conflict");
   });
 
-  test("BOOKING_RESCHEDULED with new uid cancels the old booking", async () => {
+  test("BOOKING_RESCHEDULED with new uid confirms the new booking and cancels the old", async () => {
     await post(
       webhookBody("BOOKING_RESCHEDULED", { ...baseBooking, uid: "new456", rescheduleUid: "abc123" }),
     );
-    const bookings = calls.filter((c) => c.url.includes("/objects/bookings/records"));
+    const bookings = calls.filter((c) => c.method === "PUT" && c.url.includes("/objects/bookings/records"));
     expect(bookings.length).toBe(2);
     expect(bookings[0].body.data.values.booking_uid).toBe("new456");
-    expect(bookings[0].body.data.values.status).toBe("rescheduled");
+    expect(bookings[0].body.data.values.status).toBe("confirmed");
     expect(bookings[1].body.data.values.booking_uid).toBe("abc123");
     expect(bookings[1].body.data.values.status).toBe("cancelled");
+  });
+
+  test("retried BOOKING_CREATED does not resurrect a cancelled booking", async () => {
+    existingStatus = "cancelled";
+    const res = await post(webhookBody("BOOKING_CREATED", baseBooking));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("already cancelled");
+    expect(bookingUpsert()).toBeUndefined();
   });
 
   test("BOOKING_NO_SHOW_UPDATED maps noShow flag", async () => {
@@ -146,6 +169,12 @@ describe("handleRequest", () => {
       }),
     );
     expect(bookingUpsert()!.body.data.values.status).toBe("no_show");
+  });
+
+  test("BOOKING_NO_SHOW_UPDATED without a noShow flag writes nothing", async () => {
+    const res = await post(webhookBody("BOOKING_NO_SHOW_UPDATED", baseBooking));
+    expect(res.status).toBe(200);
+    expect(bookingUpsert()).toBeUndefined();
   });
 
   test("MEETING_ENDED flat payload marks completed", async () => {

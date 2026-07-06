@@ -28,7 +28,15 @@ export async function assertPerson(
   attendee: { email: string; name?: string },
 ): Promise<string> {
   const values: Record<string, unknown> = { email_addresses: [attendee.email] };
-  if (attendee.name) values.name = attendee.name;
+  if (attendee.name) {
+    // Attio's people.name is a personal-name type: structured, not a bare string.
+    const [first, ...rest] = attendee.name.trim().split(/\s+/);
+    values.name = [{
+      first_name: first,
+      last_name: rest.join(" ") || undefined,
+      full_name: attendee.name,
+    }];
+  }
   const res = await attio(
     apiKey,
     "PUT",
@@ -66,6 +74,16 @@ export async function assertBooking(apiKey: string, booking: BookingValues) {
     "/objects/bookings/records?matching_attribute=booking_uid",
     { data: { values } },
   );
+}
+
+/** Current status of a booking record, or null if the record doesn't exist. */
+export async function getBookingStatus(apiKey: string, bookingUid: string): Promise<string | null> {
+  const res = await attio(apiKey, "POST", "/objects/bookings/records/query", {
+    filter: { booking_uid: bookingUid },
+    limit: 1,
+  });
+  const status = res?.data?.[0]?.values?.status?.[0];
+  return status?.option?.title ?? null;
 }
 
 // --- setup helpers (used by scripts/setup-attio.ts) ---

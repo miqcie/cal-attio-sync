@@ -16,7 +16,8 @@ const TRIGGERS = [
   "MEETING_ENDED",
 ];
 
-const res = await fetch(`https://api.cal.com/v1/webhooks?apiKey=${apiKey}`, {
+// Cal.com v1 only supports query-param auth; the key will appear in any request logs.
+const res = await fetch(`https://api.cal.com/v1/webhooks?apiKey=${encodeURIComponent(apiKey)}`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
