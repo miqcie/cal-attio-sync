@@ -63,9 +63,11 @@ export interface BookingValues {
  * Idempotent upsert of a booking, stored as an entry in the "bookings" list
  * (parented to People — Attio's free plan doesn't allow custom objects).
  *
- * With an attendee we assert (create-or-update) the entry keyed on booking_uid.
- * Without one (e.g. a flat MEETING_ENDED payload) we can only update an
- * existing entry, since a list entry needs a parent record to be created.
+ * Deliberately NOT Attio's assert endpoint: PUT /lists/{list}/entries matches
+ * on the PARENT record regardless of matching_attribute, so a person's second
+ * booking would overwrite their first. Instead: query by booking_uid, then
+ * PATCH the match or POST a fresh entry. Retries stay idempotent via the
+ * query, and booking_uid's uniqueness constraint backstops the rare race.
  */
 export async function assertBooking(apiKey: string, booking: BookingValues) {
   const { attendee, ...rest } = booking;
@@ -73,15 +75,16 @@ export async function assertBooking(apiKey: string, booking: BookingValues) {
     // != null drops both null and undefined — Cal.com sends explicit nulls (e.g. cancellationReason).
     Object.entries(rest).filter(([, v]) => v != null && v !== ""),
   );
-  if (attendee) {
-    return attio(apiKey, "PUT", "/lists/bookings/entries?matching_attribute=booking_uid", {
-      data: { parent_record_id: attendee, parent_object: "people", entry_values },
+  const existing = await findBookingEntry(apiKey, booking.booking_uid);
+  if (existing) {
+    return attio(apiKey, "PATCH", `/lists/bookings/entries/${existing.entryId}`, {
+      data: { entry_values },
     });
   }
-  const existing = await findBookingEntry(apiKey, booking.booking_uid);
-  if (!existing) return null;
-  return attio(apiKey, "PATCH", `/lists/bookings/entries/${existing.entryId}`, {
-    data: { entry_values },
+  // A list entry needs a parent record; without an attendee there's nothing to create.
+  if (!attendee) return null;
+  return attio(apiKey, "POST", "/lists/bookings/entries", {
+    data: { parent_record_id: attendee, parent_object: "people", entry_values },
   });
 }
 
