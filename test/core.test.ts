@@ -109,6 +109,14 @@ describe("handleRequest", () => {
     expect(calls.length).toBe(0);
   });
 
+  test("null fields from real Cal.com payloads are stripped, not sent to Attio", async () => {
+    // Real BOOKING_CREATED payloads carry cancellationReason: null (regression: Attio 400s on null).
+    await post(webhookBody("BOOKING_CREATED", { ...baseBooking, cancellationReason: null, location: null }));
+    const v = bookingUpsert()!.body.data.entry_values;
+    expect("cancellation_reason" in v).toBe(false);
+    expect("location" in v).toBe(false);
+  });
+
   test("BOOKING_CREATED asserts person and booking", async () => {
     const res = await post(webhookBody("BOOKING_CREATED", baseBooking));
     expect(res.status).toBe(200);
