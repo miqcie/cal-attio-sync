@@ -22,17 +22,20 @@ interface RecordedCall {
   body: any;
 }
 let calls: RecordedCall[] = [];
-let existingStatus: string | null = null; // what the status query reports for the booking
+let existingEntries: Record<string, string> = {}; // booking_uid → current status in "Attio"
 const realFetch = globalThis.fetch;
 
 beforeEach(() => {
   calls = [];
-  existingStatus = null;
+  existingEntries = {};
   globalThis.fetch = (async (url: any, init: any) => {
-    calls.push({ method: init.method, url: String(url), body: JSON.parse(init.body) });
+    const body = JSON.parse(init.body);
+    calls.push({ method: init.method, url: String(url), body });
     if (String(url).includes("/entries/query")) {
-      const data = existingStatus
-        ? [{ id: { entry_id: "entry-1" }, entry_values: { status: [{ option: { title: existingStatus } }] } }]
+      const uid = body.filter?.booking_uid;
+      const status = uid ? existingEntries[uid] : undefined;
+      const data = status
+        ? [{ id: { entry_id: `entry-${uid}` }, entry_values: { status: [{ option: { title: status } }] } }]
         : [];
       return new Response(JSON.stringify({ data }), { status: 200 });
     }
@@ -73,8 +76,14 @@ const baseBooking = {
   responses: { notes: { value: "Interested in CMMC" } },
 };
 
-function bookingUpsert(): RecordedCall | undefined {
-  return calls.find((c) => c.method === "PUT" && c.url.includes("/lists/bookings/entries"));
+function bookingCreate(): RecordedCall | undefined {
+  return calls.find((c) => c.method === "POST" && c.url.endsWith("/lists/bookings/entries"));
+}
+function bookingPatch(): RecordedCall | undefined {
+  return calls.find((c) => c.method === "PATCH" && c.url.includes("/lists/bookings/entries/"));
+}
+function bookingWrite(): RecordedCall | undefined {
+  return bookingCreate() ?? bookingPatch();
 }
 function personUpserts(): RecordedCall[] {
   return calls.filter((c) => c.url.includes("/objects/people/records"));
@@ -112,7 +121,7 @@ describe("handleRequest", () => {
   test("null fields from real Cal.com payloads are stripped, not sent to Attio", async () => {
     // Real BOOKING_CREATED payloads carry cancellationReason: null (regression: Attio 400s on null).
     await post(webhookBody("BOOKING_CREATED", { ...baseBooking, cancellationReason: null, location: null }));
-    const v = bookingUpsert()!.body.data.entry_values;
+    const v = bookingWrite()!.body.data.entry_values;
     expect("cancellation_reason" in v).toBe(false);
     expect("location" in v).toBe(false);
   });
@@ -130,9 +139,9 @@ describe("handleRequest", () => {
       { first_name: "Jane", last_name: "Doe", full_name: "Jane Doe" },
     ]);
 
-    const booking = bookingUpsert()!;
-    expect(booking.method).toBe("PUT");
-    expect(booking.url).toContain("matching_attribute=booking_uid");
+    // New booking → POST create (NOT Attio's assert endpoint, which matches on parent
+    // and would overwrite a repeat booker's previous booking).
+    const booking = bookingCreate()!;
     expect(booking.body.data.parent_record_id).toBe("person-123");
     expect(booking.body.data.parent_object).toBe("people");
     const v = booking.body.data.entry_values;
@@ -141,35 +150,47 @@ describe("handleRequest", () => {
     expect(JSON.parse(v.form_responses).notes.value).toBe("Interested in CMMC");
   });
 
-  test("BOOKING_CANCELLED sets status and reason", async () => {
+  test("BOOKING_CANCELLED patches the existing entry with status and reason", async () => {
+    existingEntries.abc123 = "confirmed";
     await post(
       webhookBody("BOOKING_CANCELLED", { ...baseBooking, cancellationReason: "conflict" }),
     );
-    const v = bookingUpsert()!.body.data.entry_values;
-    expect(v.status).toBe("cancelled");
-    expect(v.cancellation_reason).toBe("conflict");
+    const patch = bookingPatch()!;
+    expect(patch.url).toContain("/lists/bookings/entries/entry-abc123");
+    expect(patch.body.data.entry_values.status).toBe("cancelled");
+    expect(patch.body.data.entry_values.cancellation_reason).toBe("conflict");
+    expect(bookingCreate()).toBeUndefined();
   });
 
   test("BOOKING_RESCHEDULED with new uid confirms the new booking and cancels the old", async () => {
-    existingStatus = "confirmed"; // the old entry exists
+    existingEntries.abc123 = "confirmed"; // the old entry exists; new456 does not
     await post(
       webhookBody("BOOKING_RESCHEDULED", { ...baseBooking, uid: "new456", rescheduleUid: "abc123" }),
     );
-    const put = bookingUpsert()!;
-    expect(put.body.data.entry_values.booking_uid).toBe("new456");
-    expect(put.body.data.entry_values.status).toBe("confirmed");
-    // Old uid has no attendee in this call → updated in place via PATCH.
-    const patch = calls.find((c) => c.method === "PATCH")!;
-    expect(patch.url).toContain("/lists/bookings/entries/entry-1");
+    const created = bookingCreate()!;
+    expect(created.body.data.entry_values.booking_uid).toBe("new456");
+    expect(created.body.data.entry_values.status).toBe("confirmed");
+    const patch = bookingPatch()!;
+    expect(patch.url).toContain("/lists/bookings/entries/entry-abc123");
     expect(patch.body.data.entry_values.status).toBe("cancelled");
   });
 
+  test("a repeat booker's second booking creates a new entry, not an overwrite", async () => {
+    // Regression: Attio's assert endpoint matches on parent record, so the same
+    // person booking twice silently replaced their first booking's entry.
+    existingEntries.abc123 = "confirmed"; // first booking already synced
+    await post(webhookBody("BOOKING_CREATED", { ...baseBooking, uid: "second-visit" }));
+    const created = bookingCreate()!;
+    expect(created.body.data.entry_values.booking_uid).toBe("second-visit");
+    expect(bookingPatch()).toBeUndefined(); // first booking untouched
+  });
+
   test("retried BOOKING_CREATED does not resurrect a cancelled booking", async () => {
-    existingStatus = "cancelled";
+    existingEntries.abc123 = "cancelled";
     const res = await post(webhookBody("BOOKING_CREATED", baseBooking));
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("already cancelled");
-    expect(bookingUpsert()).toBeUndefined();
+    expect(bookingWrite()).toBeUndefined();
   });
 
   test("BOOKING_NO_SHOW_UPDATED maps noShow flag", async () => {
@@ -179,18 +200,18 @@ describe("handleRequest", () => {
         attendees: [{ email: "jane@example.com", noShow: true }],
       }),
     );
-    expect(bookingUpsert()!.body.data.entry_values.status).toBe("no_show");
+    expect(bookingWrite()!.body.data.entry_values.status).toBe("no_show");
   });
 
   test("BOOKING_NO_SHOW_UPDATED without a noShow flag writes nothing", async () => {
     const res = await post(webhookBody("BOOKING_NO_SHOW_UPDATED", baseBooking));
     expect(res.status).toBe(200);
-    expect(bookingUpsert()).toBeUndefined();
+    expect(bookingWrite()).toBeUndefined();
   });
 
   test("MEETING_ENDED flat payload marks the existing entry completed via PATCH", async () => {
     // Flat payload: booking fields at top level, no attendees array in some deliveries.
-    existingStatus = "confirmed";
+    existingEntries.abc123 = "confirmed";
     await post(
       webhookBody("MEETING_ENDED", {
         bookingUid: "abc123",
@@ -199,14 +220,15 @@ describe("handleRequest", () => {
         endTime: baseBooking.endTime,
       }),
     );
-    const patch = calls.find((c) => c.method === "PATCH")!;
-    expect(patch.url).toContain("/lists/bookings/entries/entry-1");
+    const patch = bookingPatch()!;
+    expect(patch.url).toContain("/lists/bookings/entries/entry-abc123");
     expect(patch.body.data.entry_values.status).toBe("completed");
   });
 
   test("MEETING_ENDED for an unknown booking writes nothing", async () => {
     await post(webhookBody("MEETING_ENDED", { bookingUid: "ghost" }));
-    expect(calls.filter((c) => c.method !== "POST").length).toBe(0);
+    expect(bookingWrite()).toBeUndefined();
+    expect(personUpserts().length).toBe(0);
   });
 
   test("unhandled event is ignored without Attio calls", async () => {
