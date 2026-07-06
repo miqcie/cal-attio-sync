@@ -1,12 +1,13 @@
-// One-shot, idempotent setup: creates the "Bookings" object and its attributes in Attio.
+// One-shot, idempotent setup: creates the "Bookings" list (parented to People)
+// and its attributes in Attio. A list, not a custom object, so it works on the free plan.
 // Usage: ATTIO_API_KEY=... bun scripts/setup-attio.ts
 
 import {
   AttioError,
   createAttribute,
-  createObject,
+  createList,
   createSelectOption,
-  getObject,
+  getList,
 } from "../src/attio.ts";
 
 const apiKey = process.env.ATTIO_API_KEY;
@@ -18,10 +19,12 @@ if (!apiKey) {
 const text = (slug: string, title: string, extra: Record<string, unknown> = {}) => ({
   api_slug: slug,
   title,
+  description: "",
   type: "text",
   is_required: false,
   is_unique: false,
   is_multiselect: false,
+  config: {},
   ...extra,
 });
 
@@ -31,11 +34,7 @@ const ATTRIBUTES: Record<string, unknown>[] = [
   { ...text("starts_at", "Starts at"), type: "timestamp" },
   { ...text("ends_at", "Ends at"), type: "timestamp" },
   { ...text("status", "Status"), type: "select" },
-  {
-    ...text("attendee", "Attendee"),
-    type: "record-reference",
-    config: { record_reference: { allowed_objects: ["people"] } },
-  },
+  // No attendee attribute: the list entry's parent record IS the attendee person.
   text("organizer_email", "Organizer email"),
   text("location", "Location"),
   text("cancellation_reason", "Cancellation reason"),
@@ -44,12 +43,12 @@ const ATTRIBUTES: Record<string, unknown>[] = [
 
 const STATUS_OPTIONS = ["confirmed", "rescheduled", "cancelled", "no_show", "completed"];
 
-const existing = await getObject(apiKey);
+const existing = await getList(apiKey);
 if (existing) {
-  console.log("Bookings object already exists — skipping object creation.");
+  console.log("Bookings list already exists — skipping list creation.");
 } else {
-  await createObject(apiKey);
-  console.log("Created Bookings object.");
+  await createList(apiKey);
+  console.log("Created Bookings list.");
 }
 
 for (const attr of ATTRIBUTES) {

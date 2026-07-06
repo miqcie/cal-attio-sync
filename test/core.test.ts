@@ -30,9 +30,9 @@ beforeEach(() => {
   existingStatus = null;
   globalThis.fetch = (async (url: any, init: any) => {
     calls.push({ method: init.method, url: String(url), body: JSON.parse(init.body) });
-    if (String(url).includes("/records/query")) {
+    if (String(url).includes("/entries/query")) {
       const data = existingStatus
-        ? [{ values: { status: [{ option: { title: existingStatus } }] } }]
+        ? [{ id: { entry_id: "entry-1" }, entry_values: { status: [{ option: { title: existingStatus } }] } }]
         : [];
       return new Response(JSON.stringify({ data }), { status: 200 });
     }
@@ -74,7 +74,7 @@ const baseBooking = {
 };
 
 function bookingUpsert(): RecordedCall | undefined {
-  return calls.find((c) => c.method === "PUT" && c.url.includes("/objects/bookings/records"));
+  return calls.find((c) => c.method === "PUT" && c.url.includes("/lists/bookings/entries"));
 }
 function personUpserts(): RecordedCall[] {
   return calls.filter((c) => c.url.includes("/objects/people/records"));
@@ -125,10 +125,11 @@ describe("handleRequest", () => {
     const booking = bookingUpsert()!;
     expect(booking.method).toBe("PUT");
     expect(booking.url).toContain("matching_attribute=booking_uid");
-    const v = booking.body.data.values;
+    expect(booking.body.data.parent_record_id).toBe("person-123");
+    expect(booking.body.data.parent_object).toBe("people");
+    const v = booking.body.data.entry_values;
     expect(v.booking_uid).toBe("abc123");
     expect(v.status).toBe("confirmed");
-    expect(v.attendee).toEqual([{ target_object: "people", target_record_id: "person-123" }]);
     expect(JSON.parse(v.form_responses).notes.value).toBe("Interested in CMMC");
   });
 
@@ -136,21 +137,23 @@ describe("handleRequest", () => {
     await post(
       webhookBody("BOOKING_CANCELLED", { ...baseBooking, cancellationReason: "conflict" }),
     );
-    const v = bookingUpsert()!.body.data.values;
+    const v = bookingUpsert()!.body.data.entry_values;
     expect(v.status).toBe("cancelled");
     expect(v.cancellation_reason).toBe("conflict");
   });
 
   test("BOOKING_RESCHEDULED with new uid confirms the new booking and cancels the old", async () => {
+    existingStatus = "confirmed"; // the old entry exists
     await post(
       webhookBody("BOOKING_RESCHEDULED", { ...baseBooking, uid: "new456", rescheduleUid: "abc123" }),
     );
-    const bookings = calls.filter((c) => c.method === "PUT" && c.url.includes("/objects/bookings/records"));
-    expect(bookings.length).toBe(2);
-    expect(bookings[0].body.data.values.booking_uid).toBe("new456");
-    expect(bookings[0].body.data.values.status).toBe("confirmed");
-    expect(bookings[1].body.data.values.booking_uid).toBe("abc123");
-    expect(bookings[1].body.data.values.status).toBe("cancelled");
+    const put = bookingUpsert()!;
+    expect(put.body.data.entry_values.booking_uid).toBe("new456");
+    expect(put.body.data.entry_values.status).toBe("confirmed");
+    // Old uid has no attendee in this call → updated in place via PATCH.
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.url).toContain("/lists/bookings/entries/entry-1");
+    expect(patch.body.data.entry_values.status).toBe("cancelled");
   });
 
   test("retried BOOKING_CREATED does not resurrect a cancelled booking", async () => {
@@ -168,7 +171,7 @@ describe("handleRequest", () => {
         attendees: [{ email: "jane@example.com", noShow: true }],
       }),
     );
-    expect(bookingUpsert()!.body.data.values.status).toBe("no_show");
+    expect(bookingUpsert()!.body.data.entry_values.status).toBe("no_show");
   });
 
   test("BOOKING_NO_SHOW_UPDATED without a noShow flag writes nothing", async () => {
@@ -177,8 +180,9 @@ describe("handleRequest", () => {
     expect(bookingUpsert()).toBeUndefined();
   });
 
-  test("MEETING_ENDED flat payload marks completed", async () => {
+  test("MEETING_ENDED flat payload marks the existing entry completed via PATCH", async () => {
     // Flat payload: booking fields at top level, no attendees array in some deliveries.
+    existingStatus = "confirmed";
     await post(
       webhookBody("MEETING_ENDED", {
         bookingUid: "abc123",
@@ -187,9 +191,14 @@ describe("handleRequest", () => {
         endTime: baseBooking.endTime,
       }),
     );
-    const v = bookingUpsert()!.body.data.values;
-    expect(v.booking_uid).toBe("abc123");
-    expect(v.status).toBe("completed");
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.url).toContain("/lists/bookings/entries/entry-1");
+    expect(patch.body.data.entry_values.status).toBe("completed");
+  });
+
+  test("MEETING_ENDED for an unknown booking writes nothing", async () => {
+    await post(webhookBody("MEETING_ENDED", { bookingUid: "ghost" }));
+    expect(calls.filter((c) => c.method !== "POST").length).toBe(0);
   });
 
   test("unhandled event is ignored without Attio calls", async () => {

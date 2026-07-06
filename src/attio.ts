@@ -52,61 +52,86 @@ export interface BookingValues {
   starts_at?: string;
   ends_at?: string;
   status?: string;
-  attendee?: string; // person record_id
+  attendee?: string; // person record_id — becomes the list entry's parent record
   organizer_email?: string;
   location?: string;
   cancellation_reason?: string;
   form_responses?: string;
 }
 
-/** Idempotent upsert of a booking record keyed on booking_uid. */
+/**
+ * Idempotent upsert of a booking, stored as an entry in the "bookings" list
+ * (parented to People — Attio's free plan doesn't allow custom objects).
+ *
+ * With an attendee we assert (create-or-update) the entry keyed on booking_uid.
+ * Without one (e.g. a flat MEETING_ENDED payload) we can only update an
+ * existing entry, since a list entry needs a parent record to be created.
+ */
 export async function assertBooking(apiKey: string, booking: BookingValues) {
   const { attendee, ...rest } = booking;
-  const values: Record<string, unknown> = Object.fromEntries(
+  const entry_values: Record<string, unknown> = Object.fromEntries(
     Object.entries(rest).filter(([, v]) => v !== undefined && v !== ""),
   );
   if (attendee) {
-    values.attendee = [{ target_object: "people", target_record_id: attendee }];
+    return attio(apiKey, "PUT", "/lists/bookings/entries?matching_attribute=booking_uid", {
+      data: { parent_record_id: attendee, parent_object: "people", entry_values },
+    });
   }
-  return attio(
-    apiKey,
-    "PUT",
-    "/objects/bookings/records?matching_attribute=booking_uid",
-    { data: { values } },
-  );
+  const existing = await findBookingEntry(apiKey, booking.booking_uid);
+  if (!existing) return null;
+  return attio(apiKey, "PATCH", `/lists/bookings/entries/${existing.entryId}`, {
+    data: { entry_values },
+  });
 }
 
-/** Current status of a booking record, or null if the record doesn't exist. */
-export async function getBookingStatus(apiKey: string, bookingUid: string): Promise<string | null> {
-  const res = await attio(apiKey, "POST", "/objects/bookings/records/query", {
+async function findBookingEntry(
+  apiKey: string,
+  bookingUid: string,
+): Promise<{ entryId: string; status: string | null } | null> {
+  const res = await attio(apiKey, "POST", "/lists/bookings/entries/query", {
     filter: { booking_uid: bookingUid },
     limit: 1,
   });
-  const status = res?.data?.[0]?.values?.status?.[0];
-  return status?.option?.title ?? null;
+  const entry = res?.data?.[0];
+  if (!entry) return null;
+  return {
+    entryId: entry.id.entry_id,
+    status: entry.entry_values?.status?.[0]?.option?.title ?? null,
+  };
+}
+
+/** Current status of a booking entry, or null if it doesn't exist. */
+export async function getBookingStatus(apiKey: string, bookingUid: string): Promise<string | null> {
+  return (await findBookingEntry(apiKey, bookingUid))?.status ?? null;
 }
 
 // --- setup helpers (used by scripts/setup-attio.ts) ---
 
-export async function createObject(apiKey: string) {
-  return attio(apiKey, "POST", "/objects", {
-    data: { api_slug: "bookings", singular_noun: "Booking", plural_noun: "Bookings" },
+export async function createList(apiKey: string) {
+  return attio(apiKey, "POST", "/lists", {
+    data: {
+      name: "Bookings",
+      api_slug: "bookings",
+      parent_object: "people",
+      workspace_access: "full-access",
+      workspace_member_access: [],
+    },
   });
 }
 
 export async function createAttribute(apiKey: string, attr: Record<string, unknown>) {
-  return attio(apiKey, "POST", "/objects/bookings/attributes", { data: attr });
+  return attio(apiKey, "POST", "/lists/bookings/attributes", { data: attr });
 }
 
 export async function createSelectOption(apiKey: string, attribute: string, title: string) {
-  return attio(apiKey, "POST", `/objects/bookings/attributes/${attribute}/options`, {
+  return attio(apiKey, "POST", `/lists/bookings/attributes/${attribute}/options`, {
     data: { title },
   });
 }
 
-export async function getObject(apiKey: string): Promise<unknown | null> {
+export async function getList(apiKey: string): Promise<unknown | null> {
   try {
-    return await attio(apiKey, "GET", "/objects/bookings");
+    return await attio(apiKey, "GET", "/lists/bookings");
   } catch (e) {
     if (e instanceof AttioError && e.status === 404) return null;
     throw e;
