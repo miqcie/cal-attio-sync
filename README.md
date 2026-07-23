@@ -1,5 +1,7 @@
 # cal-attio-sync
 
+https://www.val.town/x/miqcie/cal-attio
+
 Free, self-hosted Cal.com → Attio booking sync. A single webhook handler that:
 
 1. receives Cal.com booking webhooks (created / rescheduled / cancelled / no-show / meeting ended),
