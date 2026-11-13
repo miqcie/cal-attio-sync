@@ -1,7 +1,7 @@
 // Platform-agnostic Cal.com → Attio webhook handler.
-// Entry points (Val.town main.tsx, Cloudflare worker.ts) just call handleRequest().
+// Entry points (Vercel api/webhook.ts, Cloudflare worker.ts) just call handleRequest().
 
-import { assertBooking, assertPerson, getBookingStatus, type BookingValues } from "./attio.ts";
+import { assertBooking, assertPerson, getBookingStatus, type BookingValues } from "./attio.js";
 
 export interface Env {
   ATTIO_API_KEY: string;
