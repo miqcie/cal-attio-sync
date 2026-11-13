@@ -1,4 +1,4 @@
-// Minimal Attio v2 API client using Web-standard fetch (runs on Val.town, Workers, Bun).
+// Minimal Attio v2 API client using Web-standard fetch (runs on Vercel, Workers, Bun).
 
 const BASE = "https://api.attio.com/v2";
 

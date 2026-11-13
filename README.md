@@ -1,7 +1,5 @@
 # cal-attio-sync
 
-https://www.val.town/x/miqcie/cal-attio
-
 Free, self-hosted Cal.com → Attio booking sync. A single webhook handler that:
 
 1. receives Cal.com booking webhooks (created / rescheduled / cancelled / no-show / meeting ended),
@@ -10,7 +8,7 @@ Free, self-hosted Cal.com → Attio booking sync. A single webhook handler that:
 
 A list rather than a custom object because Attio's free plan doesn't allow custom objects; the entry's parent record is the attendee, so bookings show on the person's timeline either way.
 
-No database. Attio is the store. Runs on [Val.town](https://val.town) or Cloudflare Workers (free tiers of either) — the core is plain Web-standard TypeScript.
+No database. Attio is the store. Runs on Vercel Functions or Cloudflare Workers (free tiers of either) — the core is plain Web-standard TypeScript. (Val Town support was removed: Val Town is shutting down.)
 
 ## Setup
 
@@ -28,7 +26,16 @@ Idempotent — creates the `bookings` list (parent: People) with `booking_uid` (
 
 Pick a webhook secret (any random string). You'll set it twice — on the handler and in Cal.com.
 
-**Val.town** — create an HTTP val from `main.tsx` + `src/` (or use the [`vt` CLI](https://docs.val.town/vt) to push this repo), then set `ATTIO_API_KEY` and `CAL_WEBHOOK_SECRET` in the val's Environment Variables. Your endpoint is the val's URL.
+**Vercel** (`api/webhook.ts`):
+
+```sh
+vercel link
+vercel env add ATTIO_API_KEY production
+vercel env add CAL_WEBHOOK_SECRET production
+vercel deploy --prod
+```
+
+Your endpoint is `https://<project>.vercel.app/api/webhook`. Use the production alias: Vercel's default Deployment Protection puts preview and per-deploy URLs behind a login, so Cal.com deliveries to them fail. If the project is connected to GitHub, merges to `main` deploy to production.
 
 **Cloudflare Workers**:
 
